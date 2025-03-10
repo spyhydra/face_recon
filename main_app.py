@@ -8,6 +8,7 @@ import datetime
 import time
 import pyttsx3
 import threading
+from tkinter import messagebox
 
 # Import our utility modules
 import config
@@ -15,8 +16,13 @@ import face_utils
 import db_utils
 import ui_utils
 
+# Add import for advanced face recognition
+import advanced_face_recognition as afr
+import train_advanced_model
+
 # Initialize text-to-speech engine
 tts_engine = None
+tts_busy = False
 
 def get_tts_engine():
     """Lazy initialization of text-to-speech engine"""
@@ -27,17 +33,52 @@ def get_tts_engine():
 
 def text_to_speech(user_text):
     """Convert text to speech"""
+    global tts_busy
+    
+    # Skip if TTS is already busy
+    if tts_busy:
+        print(f"TTS (skipped): {user_text}")
+        return
+        
     try:
+        tts_busy = True
         engine = get_tts_engine()
         
         # Run in a separate thread to avoid blocking the UI
         def speak():
-            engine.say(user_text)
-            engine.runAndWait()
+            global tts_busy
+            try:
+                engine.say(user_text)
+                engine.runAndWait()
+            except Exception as e:
+                print(f"Error in text-to-speech speak function: {e}")
+            finally:
+                tts_busy = False
         
         threading.Thread(target=speak, daemon=True).start()
     except Exception as e:
         print(f"Error in text-to-speech: {e}")
+        tts_busy = False
+
+def verify_system_files():
+    """Verify that critical system files exist"""
+    critical_files = [
+        (config.HAARCASCADE_FRONTAL_FACE_PATH, "Primary face cascade file"),
+        (config.HAARCASCADE_ALT_PATH, "Alternative face cascade file")
+    ]
+    
+    missing_files = []
+    for file_path, description in critical_files:
+        if not os.path.exists(file_path):
+            missing_files.append(f"{description}: {file_path}")
+    
+    if missing_files:
+        error_message = "Missing critical files:\n" + "\n".join(missing_files)
+        print(error_message)
+        messagebox.showerror("Missing Files", error_message)
+        return False
+    
+    return True
 
 class AttendanceSystem:
     """Main application class for the attendance system"""
@@ -49,6 +90,11 @@ class AttendanceSystem:
         self.root.geometry("1280x720")
         self.root.resizable(True, True)
         self.root.configure(background=config.UI_THEME["bg_color"])
+        
+        # Verify system files
+        if not verify_system_files():
+            self.root.after(1000, self.root.destroy)
+            return
         
         # Set window icon
         try:
@@ -111,82 +157,108 @@ class AttendanceSystem:
         self.registration_frame = tk.Frame(
             self.content_frame, 
             bg=config.UI_THEME["bg_color"], 
-            bd=2, 
-            relief=RIDGE
+            relief=RIDGE, 
+            bd=5
         )
         self.registration_frame.pack(side=LEFT, fill=BOTH, expand=True, padx=10, pady=10)
         
-        # Add a title for registration frame
-        registration_title = tk.Label(
-            self.registration_frame,
-            text="Student Registration",
+        # Add title
+        title_label = tk.Label(
+            self.registration_frame, 
+            text="Registration",
             bg=config.UI_THEME["bg_color"],
             fg=config.UI_THEME["fg_color"],
             font=("Verdana", 20, "bold")
         )
-        registration_title.pack(pady=10)
+        title_label.pack(pady=10)
         
-        # Create validation for enrollment number (only digits)
-        validate_cmd = (self.root.register(self.validate_enrollment), '%P')
-        
-        # Create enrollment entry
-        enrollment_frame, self.enrollment_entry = ui_utils.create_entry_with_label(
-            self.registration_frame,
-            "Enrollment:",
-            validate_cmd,
-            width=20
+        # Add form frame
+        form_frame = tk.Frame(
+            self.registration_frame, 
+            bg=config.UI_THEME["bg_color"]
         )
-        enrollment_frame.pack(pady=10)
+        form_frame.pack(pady=10)
         
-        # Create name entry
-        name_frame, self.name_entry = ui_utils.create_entry_with_label(
-            self.registration_frame,
-            "Name:",
-            width=20
+        # Add enrollment field
+        enrollment_label = tk.Label(
+            form_frame, 
+            text="Enrollment",
+            bg=config.UI_THEME["bg_color"],
+            fg=config.UI_THEME["fg_color"],
+            font=("Verdana", 12)
         )
-        name_frame.pack(pady=10)
+        enrollment_label.grid(row=0, column=0, padx=10, pady=5, sticky=W)
         
-        # Create a message label
+        self.enrollment_entry = tk.Entry(
+            form_frame, 
+            validate="key", 
+            validatecommand=(self.root.register(self.validate_enrollment), '%P')
+        )
+        self.enrollment_entry.grid(row=0, column=1, padx=10, pady=5)
+        
+        # Add name field
+        name_label = tk.Label(
+            form_frame, 
+            text="Name",
+            bg=config.UI_THEME["bg_color"],
+            fg=config.UI_THEME["fg_color"],
+            font=("Verdana", 12)
+        )
+        name_label.grid(row=1, column=0, padx=10, pady=5, sticky=W)
+        
+        self.name_entry = tk.Entry(form_frame)
+        self.name_entry.grid(row=1, column=1, padx=10, pady=5)
+        
+        # Add buttons frame
+        buttons_frame = tk.Frame(
+            self.registration_frame, 
+            bg=config.UI_THEME["bg_color"]
+        )
+        buttons_frame.pack(pady=10)
+        
+        # Add Take Image button
+        self.take_image_button = tk.Button(
+            buttons_frame, 
+            text="Take Images",
+            bg=config.UI_THEME["button_bg"],
+            fg=config.UI_THEME["button_fg"],
+            font=("Verdana", 12),
+            command=self.take_image_button_action
+        )
+        self.take_image_button.grid(row=0, column=0, padx=10, pady=5)
+        
+        # Add Train Image button
+        self.train_image_button = tk.Button(
+            buttons_frame, 
+            text="Train Images",
+            bg=config.UI_THEME["button_bg"],
+            fg=config.UI_THEME["button_fg"],
+            font=("Verdana", 12),
+            command=self.train_image_button_action
+        )
+        self.train_image_button.grid(row=0, column=1, padx=10, pady=5)
+        
+        # Add Advanced Train button
+        self.advanced_train_button = tk.Button(
+            buttons_frame, 
+            text="Advanced Training",
+            bg=config.UI_THEME["button_bg"],
+            fg=config.UI_THEME["button_fg"],
+            font=("Verdana", 12),
+            command=self.advanced_train_button_action
+        )
+        self.advanced_train_button.grid(row=1, column=0, columnspan=2, padx=10, pady=5)
+        
+        # Add message label
         self.message_label = tk.Label(
-            self.registration_frame,
+            self.registration_frame, 
             text="",
             bg=config.UI_THEME["bg_color"],
             fg=config.UI_THEME["fg_color"],
             font=("Verdana", 12),
-            wraplength=400
+            wraplength=300
         )
         self.message_label.pack(pady=10)
-        
-        # Create buttons for registration
-        button_frame = tk.Frame(self.registration_frame, bg=config.UI_THEME["bg_color"])
-        button_frame.pack(pady=20)
-        
-        take_image_button = ui_utils.create_rounded_button(
-            button_frame,
-            "Take Images",
-            self.take_image_button_action,
-            width=15,
-            height=2
-        )
-        take_image_button.pack(side=LEFT, padx=10)
-        
-        train_image_button = ui_utils.create_rounded_button(
-            button_frame,
-            "Train Model",
-            self.train_image_button_action,
-            width=15,
-            height=2
-        )
-        train_image_button.pack(side=LEFT, padx=10)
-        
-        clear_button = ui_utils.create_rounded_button(
-            button_frame,
-            "Clear",
-            self.clear_fields,
-            width=15,
-            height=2
-        )
-        clear_button.pack(side=LEFT, padx=10)
     
     def create_attendance_frame(self):
         """Create the attendance frame"""
@@ -409,12 +481,49 @@ class AttendanceSystem:
                         # Extract face
                         face_img = face_utils.extract_face(frame, (x, y, w, h))
                         
-                        # Recognize face
-                        student_id, confidence = face_utils.recognize_face(
-                            face_img, 
-                            config.TRAINER_PATH,
-                            config.FACE_DETECTION_CONFIDENCE
-                        )
+                        # Try advanced face recognition first
+                        advanced_model_path = os.path.join(config.TRAINING_IMAGE_LABEL_DIR, "face_classifier.pkl")
+                        if os.path.exists(advanced_model_path):
+                            try:
+                                # Use advanced face recognition with a stricter threshold
+                                student_id, confidence = afr.recognize_face_advanced(
+                                    face_img, 
+                                    threshold=0.7  # Higher threshold for stricter matching
+                                )
+                                print(f"Advanced recognition result: ID={student_id}, Confidence={confidence:.4f}")
+                                
+                                # Add verification step for more reliability
+                                if student_id != -1:
+                                    # Verify the recognition with a second method
+                                    traditional_id, traditional_confidence = face_utils.recognize_face(
+                                        face_img, 
+                                        config.TRAINER_PATH,
+                                        config.FACE_DETECTION_CONFIDENCE
+                                    )
+                                    
+                                    # If both methods agree, we have higher confidence
+                                    if traditional_id == student_id:
+                                        print(f"Recognition verified: Both methods identified ID={student_id}")
+                                    else:
+                                        # If methods disagree, require higher confidence
+                                        if confidence < 0.8:  # Require 80% confidence if methods disagree
+                                            print(f"Methods disagree: Advanced={student_id}, Traditional={traditional_id}. Rejecting match.")
+                                            student_id = -1
+                            except Exception as e:
+                                print(f"Error with advanced recognition: {e}, falling back to traditional method")
+                                # Fall back to traditional method
+                                student_id, confidence = face_utils.recognize_face(
+                                    face_img, 
+                                    config.TRAINER_PATH,
+                                    config.FACE_DETECTION_CONFIDENCE
+                                )
+                        else:
+                            # Use traditional face recognition
+                            student_id, confidence = face_utils.recognize_face(
+                                face_img, 
+                                config.TRAINER_PATH,
+                                config.FACE_DETECTION_CONFIDENCE
+                            )
                         
                         # Draw rectangle and name
                         if student_id != -1:
@@ -595,6 +704,21 @@ class AttendanceSystem:
             height=1
         )
         close_button.pack(pady=10)
+
+    def advanced_train_button_action(self):
+        """Handle advanced train button click"""
+        # Update message
+        self.message_label.configure(text="Starting advanced training...")
+        
+        # Run training in a separate thread to avoid freezing the UI
+        def training_thread():
+            train_advanced_model.train_advanced_model(
+                self.message_label,
+                text_to_speech,
+                self.root
+            )
+        
+        threading.Thread(target=training_thread, daemon=True).start()
 
 # Main entry point
 if __name__ == "__main__":

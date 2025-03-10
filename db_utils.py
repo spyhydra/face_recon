@@ -62,8 +62,11 @@ def student_exists(enrollment):
     # Read the CSV file
     try:
         df = pd.read_csv(config.STUDENT_DETAILS_PATH)
-        return enrollment in df['Enrollment'].values
-    except:
+        # Fix: Convert enrollment to string and use proper comparison
+        enrollment_str = str(enrollment)
+        return any(df['Enrollment'].astype(str) == enrollment_str)
+    except Exception as e:
+        print(f"Error checking if student exists: {e}")
         return False
 
 def get_student_name(enrollment):
