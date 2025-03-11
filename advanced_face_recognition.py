@@ -253,6 +253,25 @@ def detect_duplicate_faces(training_data, threshold=0.85):
     
     return duplicates
 
+def get_trained_info():
+    """Get information about trained images and people"""
+    info_path = os.path.join(config.TRAINING_IMAGE_LABEL_DIR, "trained_info.pkl")
+    if os.path.exists(info_path):
+        try:
+            return joblib.load(info_path)
+        except Exception as e:
+            print(f"Error loading trained info: {e}")
+    return {"trained_people": set(), "last_train_time": {}}
+
+def save_trained_info(trained_info):
+    """Save information about trained images and people"""
+    info_path = os.path.join(config.TRAINING_IMAGE_LABEL_DIR, "trained_info.pkl")
+    try:
+        os.makedirs(os.path.dirname(info_path), exist_ok=True)
+        joblib.dump(trained_info, info_path)
+    except Exception as e:
+        print(f"Error saving trained info: {e}")
+
 def train_advanced_model(train_dir, model_path, progress_callback=None):
     """
     Train an advanced face recognition model
@@ -260,23 +279,25 @@ def train_advanced_model(train_dir, model_path, progress_callback=None):
     Args:
         train_dir: Directory containing training images
         model_path: Path to save the trained model
-        progress_callback: Callback function for progress updates (value, status_text, details_text)
+        progress_callback: Callback function for progress updates
         
     Returns:
         True if training was successful, False otherwise
     """
     try:
-        # Declare global variables at the beginning of the function
         global face_classifier
         
-        # Update progress
         if progress_callback:
             progress_callback(0, "Checking training directory...")
         
-        # Check if training directory exists
         if not os.path.exists(train_dir):
             print(f"Training directory does not exist: {train_dir}")
             return False
+        
+        # Load training info
+        trained_info = get_trained_info()
+        trained_people = trained_info["trained_people"]
+        last_train_time = trained_info["last_train_time"]
         
         # Get all person directories
         person_dirs = [os.path.join(train_dir, d) for d in os.listdir(train_dir) 
@@ -286,189 +307,124 @@ def train_advanced_model(train_dir, model_path, progress_callback=None):
             print("No person directories found in training directory")
             return False
         
-        # Prepare data for training
+        # Prepare data structures
         X = []  # Face encodings
         y = []  # Person IDs
+        training_data = {}  # For duplicate detection
+        new_people_found = False
         
-        # Dictionary to store face encodings by person ID for duplicate detection
-        training_data = {}
+        # Load existing model data if available
+        if os.path.exists(model_path):
+            try:
+                existing_classifier = joblib.load(model_path)
+                X = existing_classifier.support_vectors_.tolist()
+                y = [existing_classifier.predict([sv])[0] for sv in X]
+                print(f"Loaded {len(X)} existing face encodings")
+            except Exception as e:
+                print(f"Error loading existing model: {e}")
+                X = []
+                y = []
         
-        # Update progress
         if progress_callback:
-            progress_callback(5, "Extracting face features...", "Scanning directories...")
+            progress_callback(5, "Checking for new registrations...")
         
+        # Process each person directory
         total_dirs = len(person_dirs)
         for dir_idx, person_dir in enumerate(person_dirs):
             try:
-                # Extract enrollment ID from directory name
                 dir_name = os.path.basename(person_dir)
                 if "_" not in dir_name:
-                    print(f"Invalid directory name format: {dir_name}")
                     continue
                 
                 try:
                     person_id = int(dir_name.split("_")[0])
                 except ValueError:
-                    print(f"Could not extract ID from directory name: {dir_name}")
                     continue
+                
+                # Check if this person needs training
+                dir_modified_time = os.path.getmtime(person_dir)
+                if person_id in trained_people:
+                    # Skip if no new images since last training
+                    if person_id in last_train_time and dir_modified_time <= last_train_time[person_id]:
+                        print(f"Skipping already trained person: {dir_name}")
+                        continue
+                
+                new_people_found = True
                 
                 # Get all images for this person
                 image_paths = [os.path.join(person_dir, f) for f in os.listdir(person_dir) 
                               if f.endswith(('.jpg', '.jpeg', '.png'))]
                 
                 if not image_paths:
-                    print(f"No images found in {person_dir}")
                     continue
                 
-                # Update progress
                 if progress_callback:
-                    progress_value = 5 + (45 * dir_idx / total_dirs)
                     progress_callback(
-                        progress_value,
-                        "Processing images...",
+                        5 + (45 * dir_idx / total_dirs),
+                        "Processing new images...",
                         f"Processing {dir_name} ({len(image_paths)} images)"
                     )
                 
                 # Process each image
                 person_encodings = []
-                for img_idx, image_path in enumerate(image_paths):
+                for img_path in image_paths:
                     try:
-                        # Load image
-                        image = cv2.imread(image_path)
-                        if image is None:
-                            print(f"Could not load image: {image_path}")
+                        # Skip if image was already processed
+                        img_modified_time = os.path.getmtime(img_path)
+                        if person_id in last_train_time and img_modified_time <= last_train_time[person_id]:
                             continue
                         
-                        # Detect face
+                        image = cv2.imread(img_path)
+                        if image is None:
+                            continue
+                        
                         face_locations = detect_faces_dlib(image)
                         if not face_locations:
-                            print(f"No face detected in {image_path}")
                             continue
                         
-                        # Use the largest face if multiple faces detected
-                        if len(face_locations) > 1:
-                            largest_area = 0
-                            largest_face_idx = 0
-                            for i, (top, right, bottom, left) in enumerate(face_locations):
-                                area = (bottom - top) * (right - left)
-                                if area > largest_area:
-                                    largest_area = area
-                                    largest_face_idx = i
-                            face_location = face_locations[largest_face_idx]
-                        else:
-                            face_location = face_locations[0]
+                        # Use largest face if multiple detected
+                        face_location = max(face_locations, 
+                            key=lambda loc: (loc[2] - loc[0]) * (loc[1] - loc[3]))
                         
-                        # Extract face encoding
                         encoding = extract_face_encoding(image, face_location)
-                        if encoding is None:
-                            continue
-                        
-                        person_encodings.append(encoding)
-                        
-                        # Update progress for each image
-                        if progress_callback and img_idx % 5 == 0:  # Update every 5 images
-                            sub_progress = img_idx / len(image_paths)
-                            progress_callback(
-                                progress_value + (sub_progress * 45 / total_dirs),
-                                "Processing images...",
-                                f"Processing {dir_name}: Image {img_idx + 1}/{len(image_paths)}"
-                            )
+                        if encoding is not None:
+                            person_encodings.append(encoding)
                     
                     except Exception as e:
-                        print(f"Error processing image {image_path}: {e}")
+                        print(f"Error processing image {img_path}: {e}")
                         continue
                 
-                # Only use this person if we have enough valid encodings
-                if len(person_encodings) >= 3:  # Require at least 3 valid images
+                # Add encodings if we have enough
+                if len(person_encodings) >= 3:
                     X.extend(person_encodings)
                     y.extend([person_id] * len(person_encodings))
                     training_data[person_id] = person_encodings
-                else:
-                    print(f"Not enough valid images for person {dir_name}, skipping")
+                    trained_people.add(person_id)
+                    last_train_time[person_id] = time.time()
             
             except Exception as e:
-                print(f"Error processing person directory {person_dir}: {e}")
+                print(f"Error processing directory {person_dir}: {e}")
                 continue
         
+        if not new_people_found:
+            print("No new registrations found to train")
+            if progress_callback:
+                progress_callback(100, "No new registrations found", "Model is up to date")
+            return True
+        
         if not X:
-            print("No valid face encodings found for training!")
+            print("No valid face encodings found!")
             return False
         
-        # Check for duplicate faces
-        if progress_callback:
-            progress_callback(50, "Checking for duplicate faces...")
-        
-        if len(training_data) > 1:
-            duplicates = detect_duplicate_faces(training_data)
-            if duplicates:
-                duplicate_message = "Potential duplicate faces detected:\n"
-                for id1, id2, similarity in duplicates:
-                    name1 = db_utils.get_student_name(id1) or str(id1)
-                    name2 = db_utils.get_student_name(id2) or str(id2)
-                    duplicate_message += f"- {name1} (ID: {id1}) and {name2} (ID: {id2}): {similarity*100:.1f}% similar\n"
-                print(duplicate_message)
-        
-        # Update progress
-        if progress_callback:
-            progress_callback(60, "Training model...", "Converting data...")
-        
-        # Convert lists to numpy arrays
+        # Convert to numpy arrays
         X = np.array(X)
         y = np.array(y)
         
-        if len(set(y)) < 2:
-            print(f"Need at least 2 different people for training, only found {len(set(y))}")
-            
-            # Handle single person case
-            if len(set(y)) == 1:
-                if progress_callback:
-                    progress_callback(70, "Training single-person model...")
-                
-                classifier = SVC(C=1.0, kernel='linear', probability=True)
-                person_id = list(set(y))[0]
-                X_augmented = X.copy()
-                y_augmented = y.copy()
-                
-                # Create synthetic negative samples
-                if progress_callback:
-                    progress_callback(80, "Generating synthetic samples...")
-                
-                np.random.seed(42)
-                for i in range(min(len(X), 10)):
-                    noise = np.random.normal(0, 0.1, X[i].shape)
-                    negative_sample = X[i] + noise
-                    negative_sample = negative_sample / np.linalg.norm(negative_sample)
-                    X_augmented = np.vstack([X_augmented, negative_sample])
-                    y_augmented = np.append(y_augmented, -100)
-                
-                if progress_callback:
-                    progress_callback(90, "Training classifier...")
-                
-                classifier.fit(X_augmented, y_augmented)
-                
-                # Save the model
-                if progress_callback:
-                    progress_callback(95, "Saving model...")
-                
-                os.makedirs(os.path.dirname(model_path), exist_ok=True)
-                joblib.dump(classifier, model_path)
-                
-                classifier_path = os.path.join(config.TRAINING_IMAGE_LABEL_DIR, "face_classifier.pkl")
-                joblib.dump(classifier, classifier_path)
-                
-                face_classifier = classifier
-                
-                if progress_callback:
-                    progress_callback(100, "Training completed!", "Single-person model trained successfully")
-                
-                return True
-            
-            return False
+        if progress_callback:
+            progress_callback(80, "Training classifier...", 
+                            f"Processing {len(X)} face encodings from {len(set(y))} people")
         
         # Train classifier
-        if progress_callback:
-            progress_callback(80, "Training classifier...", f"Processing {len(X)} face encodings from {len(set(y))} people")
-        
         classifier = SVC(C=1.0, kernel='linear', probability=True)
         classifier.fit(X, y)
         
@@ -479,13 +435,20 @@ def train_advanced_model(train_dir, model_path, progress_callback=None):
         os.makedirs(os.path.dirname(model_path), exist_ok=True)
         joblib.dump(classifier, model_path)
         
+        # Save as face_classifier.pkl for the module
         classifier_path = os.path.join(config.TRAINING_IMAGE_LABEL_DIR, "face_classifier.pkl")
         joblib.dump(classifier, classifier_path)
+        
+        # Update and save training info
+        trained_info["trained_people"] = trained_people
+        trained_info["last_train_time"] = last_train_time
+        save_trained_info(trained_info)
         
         face_classifier = classifier
         
         if progress_callback:
-            progress_callback(100, "Training completed!", f"Model trained with {len(X)} face encodings from {len(set(y))} people")
+            progress_callback(100, "Training completed!", 
+                            f"Model updated with {len(X)} face encodings from {len(set(y))} people")
         
         return True
         
