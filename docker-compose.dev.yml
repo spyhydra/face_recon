@@ -1,0 +1,60 @@
+version: '3.8'
+
+services:
+  face-recognition-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        - INSTALL_DEV=true
+    container_name: face-recognition-app-dev
+    volumes:
+      - .:/app
+      - ./TrainingImage:/app/TrainingImage
+      - ./StudentDetails:/app/StudentDetails
+      - ./Attendance:/app/Attendance
+      - ./TrainingImageLabel:/app/TrainingImageLabel
+    environment:
+      - DISPLAY=${DISPLAY}
+      - PYTHONUNBUFFERED=1
+      - QT_X11_NO_MITSHM=1
+      - PYTHONDONTWRITEBYTECODE=1
+      - FLASK_ENV=development
+      - FLASK_DEBUG=1
+    devices:
+      - /dev/video0:/dev/video0
+    network_mode: host
+    restart: unless-stopped
+    command: python main_app.py
+    ports:
+      - "5678:5678"  # For debugpy
+    cap_add:
+      - SYS_PTRACE  # For debugging
+    security_opt:
+      - seccomp:unconfined  # For debugging
+
+  jupyter:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        - INSTALL_DEV=true
+    container_name: face-recognition-jupyter
+    volumes:
+      - .:/app
+    ports:
+      - "8888:8888"
+    environment:
+      - JUPYTER_ENABLE_LAB=yes
+    command: jupyter lab --ip=0.0.0.0 --port=8888 --allow-root --no-browser
+
+  tests:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        - INSTALL_DEV=true
+    container_name: face-recognition-tests
+    volumes:
+      - .:/app
+    command: pytest -v --cov=. --cov-report=html 

@@ -1,0 +1,45 @@
+-r requirements.txt
+
+# Debugging
+debugpy>=1.6.0
+ipdb>=0.13.9
+
+# Testing
+pytest>=7.0.0
+pytest-cov>=3.0.0
+pytest-mock>=3.7.0
+pytest-xdist>=2.5.0
+
+# Jupyter
+jupyter>=1.0.0
+jupyterlab>=3.3.0
+ipython>=8.0.0
+
+# Code Quality
+black>=22.3.0
+flake8>=4.0.1
+isort>=5.10.1
+mypy>=0.950
+pylint>=2.13.0
+
+# Documentation
+sphinx>=4.5.0
+sphinx-rtd-theme>=1.0.0
+sphinx-autodoc-typehints>=1.18.0
+
+# Development Tools
+pre-commit>=2.18.0
+rope>=1.0.0
+autopep8>=1.6.0
+
+# Type Checking
+types-Pillow>=9.0.0
+types-requests>=2.27.0
+types-setuptools>=57.4.0
+
+# Profiling
+memory-profiler>=0.60.0
+line-profiler>=3.4.0
+
+# Monitoring
+prometheus-client>=0.14.0 

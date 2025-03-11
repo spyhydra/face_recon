@@ -283,7 +283,7 @@ class AttendanceSystem:
         # Create subject entry
         subject_frame, self.subject_entry = ui_utils.create_entry_with_label(
             self.attendance_frame,
-            "Subject:",
+            "Site:",
             width=20
         )
         subject_frame.pack(pady=10)
@@ -390,10 +390,10 @@ class AttendanceSystem:
             ui_utils.show_message(
                 self.root,
                 "Error",
-                "Please enter a subject name.",
+                "Please enter a site name.",
                 "error"
             )
-            text_to_speech("Please enter a subject name.")
+            text_to_speech("Please enter a Site name.")
             return
         
         # Take automatic attendance
@@ -436,9 +436,9 @@ class AttendanceSystem:
                 students_df = db_utils.get_all_students()
                 if students_df.empty:
                     self.root.after(0, lambda: self.attendance_message.config(
-                        text="No students found. Please register students first."
+                        text="No Worker found. Please register Wroker first."
                     ))
-                    text_to_speech("No students found. Please register students first.")
+                    text_to_speech("No Worker found. Please register Worker first.")
                     cam.release()
                     cv2.destroyAllWindows()
                     return
@@ -585,14 +585,14 @@ class AttendanceSystem:
                 # Update message
                 if recognized_students:
                     self.root.after(0, lambda: self.attendance_message.config(
-                        text=f"Attendance taken for {len(recognized_students)} students."
+                        text=f"Attendance taken for {len(recognized_students)} Workers."
                     ))
-                    text_to_speech(f"Attendance taken for {len(recognized_students)} students.")
+                    text_to_speech(f"Attendance taken for {len(recognized_students)} workers.")
                 else:
                     self.root.after(0, lambda: self.attendance_message.config(
-                        text="No students recognized."
+                        text="No workers recognized."
                     ))
-                    text_to_speech("No students recognized.")
+                    text_to_speech("No workers recognized.")
                 
                 # Update status
                 self.root.after(0, lambda: self.status_bar.config(text="Ready"))
@@ -614,10 +614,10 @@ class AttendanceSystem:
             ui_utils.show_message(
                 self.root,
                 "Error",
-                "Please enter a subject name.",
+                "Please enter a site name.",
                 "error"
             )
-            text_to_speech("Please enter a subject name.")
+            text_to_speech("Please enter a site name.")
             return
         
         # Get today's date

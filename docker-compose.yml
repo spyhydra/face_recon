@@ -1,0 +1,19 @@
+version: '3.8'
+
+services:
+  face-recognition-app:
+    build: .
+    container_name: face-recognition-app
+    volumes:
+      - ./TrainingImage:/app/TrainingImage
+      - ./StudentDetails:/app/StudentDetails
+      - ./Attendance:/app/Attendance
+      - ./TrainingImageLabel:/app/TrainingImageLabel
+    environment:
+      - DISPLAY=${DISPLAY}
+      - PYTHONUNBUFFERED=1
+      - QT_X11_NO_MITSHM=1
+    devices:
+      - /dev/video0:/dev/video0
+    network_mode: "host"  # Required for GUI applications
+    restart: unless-stopped 

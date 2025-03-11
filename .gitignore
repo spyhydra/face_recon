@@ -15,6 +15,18 @@ StudentDetails/
 *.yaml
 *.model
 
+# Docker
+.docker/
+docker-compose.override.yml
+docker-compose.*.yml
+!docker-compose.yml
+!docker-compose.dev.yml
+.env
+.dockerignore
+*.dockerfile
+Dockerfile.*
+!Dockerfile
+
 # Python
 __pycache__/*
 *.py[cod]
@@ -199,6 +211,7 @@ logs/
 
 # UI Images (except the default ones)
 UI_Image/*
+.Dockerfile
 !UI_Image/0001.png
 
 # Keep the directory structure but ignore contents
