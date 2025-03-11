@@ -11,6 +11,7 @@ from sklearn.neighbors import KNeighborsClassifier
 from sklearn.svm import SVC
 from sklearn.metrics import accuracy_score
 import joblib
+import db_utils
 
 # Global variables for models
 face_detector = None
@@ -208,9 +209,53 @@ def extract_face_encoding(image, face_location=None):
         print(f"Error in extract_face_encoding: {e}")
         return None
 
+def detect_duplicate_faces(training_data, threshold=0.85):
+    """
+    Detect potential duplicate faces across different student IDs
+    
+    Args:
+        training_data: Dictionary mapping student IDs to face encodings
+        threshold: Similarity threshold (higher means more strict)
+        
+    Returns:
+        List of tuples (id1, id2, similarity) for potential duplicates
+    """
+    duplicates = []
+    
+    # Get all student IDs
+    student_ids = list(training_data.keys())
+    
+    # Compare each pair of students
+    for i in range(len(student_ids)):
+        id1 = student_ids[i]
+        encodings1 = training_data[id1]
+        
+        for j in range(i+1, len(student_ids)):
+            id2 = student_ids[j]
+            encodings2 = training_data[id2]
+            
+            # Compare each encoding from id1 with each encoding from id2
+            for enc1 in encodings1:
+                for enc2 in encodings2:
+                    # Calculate similarity (1 - distance)
+                    distance = np.linalg.norm(enc1 - enc2)
+                    similarity = 1 - min(distance, 1.0)  # Cap at 1.0
+                    
+                    # If similarity is above threshold, consider as potential duplicate
+                    if similarity > threshold:
+                        duplicates.append((id1, id2, similarity))
+                        # Only report one match per pair
+                        break
+                
+                # If we found a duplicate for this encoding, move to next student
+                if any(d[0] == id1 and d[1] == id2 for d in duplicates):
+                    break
+    
+    return duplicates
+
 def train_advanced_model(train_dir, model_path):
     """
-    Train an advanced face recognition model using deep learning embeddings
+    Train an advanced face recognition model
     
     Args:
         train_dir: Directory containing training images
@@ -239,6 +284,9 @@ def train_advanced_model(train_dir, model_path):
         # Prepare data for training
         X = []  # Face encodings
         y = []  # Person IDs
+        
+        # Dictionary to store face encodings by person ID for duplicate detection
+        training_data = {}
         
         print("Extracting face features from training images...")
         for person_dir in tqdm(person_dirs, desc="Processing people"):
@@ -308,6 +356,9 @@ def train_advanced_model(train_dir, model_path):
                 if len(person_encodings) >= 3:  # Require at least 3 valid images
                     X.extend(person_encodings)
                     y.extend([person_id] * len(person_encodings))
+                    
+                    # Store encodings for duplicate detection
+                    training_data[person_id] = person_encodings
                 else:
                     print(f"Not enough valid images for person {dir_name}, skipping")
             
@@ -318,6 +369,21 @@ def train_advanced_model(train_dir, model_path):
         if not X:
             print("No valid face encodings found for training!")
             return False
+        
+        # Check for duplicate faces if we have multiple people
+        if len(training_data) > 1:
+            print("Checking for duplicate faces...")
+            duplicates = detect_duplicate_faces(training_data)
+            if duplicates:
+                duplicate_message = "Potential duplicate faces detected:\n"
+                for id1, id2, similarity in duplicates:
+                    # Get student names
+                    name1 = db_utils.get_student_name(id1) or str(id1)
+                    name2 = db_utils.get_student_name(id2) or str(id2)
+                    duplicate_message += f"- {name1} (ID: {id1}) and {name2} (ID: {id2}): {similarity*100:.1f}% similar\n"
+                
+                print(duplicate_message)
+                # Continue with training anyway
         
         if len(set(y)) < 2:
             print(f"Need at least 2 different people for training, only found {len(set(y))}")
@@ -391,6 +457,26 @@ def train_advanced_model(train_dir, model_path):
         face_classifier = classifier
         
         print(f"Advanced face recognition model trained and saved to {model_path}")
+        
+        # Check for duplicate faces
+        if message_callback:
+            message_callback("Checking for duplicate faces...")
+        
+        duplicates = detect_duplicate_faces(training_data)
+        if duplicates:
+            duplicate_message = "Potential duplicate faces detected:\n"
+            for id1, id2, similarity in duplicates:
+                # Get student names
+                name1 = db_utils.get_student_name(id1) or str(id1)
+                name2 = db_utils.get_student_name(id2) or str(id2)
+                duplicate_message += f"- {name1} (ID: {id1}) and {name2} (ID: {id2}): {similarity*100:.1f}% similar\n"
+            
+            if message_callback:
+                message_callback(duplicate_message)
+            
+            print(duplicate_message)
+            # Continue with training anyway
+        
         return True
     
     except Exception as e:

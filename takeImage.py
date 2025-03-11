@@ -23,7 +23,7 @@ def TakeImage(enrollment, name, message_label, text_to_speech):
         # Check if student already exists
         import db_utils
         if db_utils.student_exists(enrollment):
-            message = f"Student with ID {enrollment} already exists."
+            message = f"Worker with ID {enrollment} already exists."
             message_label.config(text=message)
             text_to_speech(message)
             return False
@@ -96,7 +96,7 @@ def TakeImage(enrollment, name, message_label, text_to_speech):
                 print(f"Primary face detection failed: {e}")
             
             # If no faces detected, try with a simpler method
-            if len(faces) == 0:  # Fixed: Use len() instead of direct boolean check
+            if len(faces) == 0:
                 try:
                     # Use OpenCV's built-in face detector as fallback
                     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -153,10 +153,10 @@ def TakeImage(enrollment, name, message_label, text_to_speech):
             capture_now = False
             
             # SPACE key to capture image
-            if key == 32 and len(faces) > 0:  # Fixed: Use len() instead of direct boolean check
+            if key == 32 and len(faces) > 0:
                 capture_now = True
             # Automatic capture if face detected and enough time has passed
-            elif len(faces) > 0 and (time.time() - last_capture_time) > capture_delay:  # Fixed: Use len() instead of direct boolean check
+            elif len(faces) > 0 and (time.time() - last_capture_time) > capture_delay:
                 capture_now = True
             
             # Capture image if needed
@@ -169,12 +169,70 @@ def TakeImage(enrollment, name, message_label, text_to_speech):
                     w_with_margin = min(w + 2 * margin, frame.shape[1] - x_with_margin)
                     h_with_margin = min(h + 2 * margin, frame.shape[0] - y_with_margin)
                     
-                    # Extract and save face
+                    # Extract face
                     face = frame[y_with_margin:y_with_margin+h_with_margin, 
                                 x_with_margin:x_with_margin+w_with_margin]
                     
                     # Ensure the face image is not empty
                     if face.size > 0:
+                        # Check if this face is a duplicate - do this check EVERY time, not just for the first image
+                        # First try with SSIM method
+                        face_exists, existing_id, similarity = face_utils.check_face_exists(face)
+                        
+                        # If not found with SSIM, try with advanced method
+                        if not face_exists:
+                            try:
+                                face_exists, existing_id, similarity = face_utils.check_face_exists_advanced(face)
+                            except Exception as e:
+                                print(f"Error in advanced face check: {e}")
+                        
+                        if face_exists:
+                            # Get student name
+                            existing_name = db_utils.get_student_name(existing_id)
+                            
+                            # Show warning message with red text
+                            warning_message = f"WARNING: This face is already registered as {existing_name} (ID: {existing_id}) with {similarity*100:.1f}% similarity."
+                            message_label.config(text=warning_message, fg="red")
+                            text_to_speech("Warning! This worker is already registered in the system.")
+                            
+                            # Display warning on the image
+                            cv2.putText(
+                                display_frame,
+                                "WORKER ALREADY EXISTS!",
+                                (10, 120),
+                                cv2.FONT_HERSHEY_SIMPLEX,
+                                1.0,
+                                (0, 0, 255),
+                                2
+                            )
+                            cv2.putText(
+                                display_frame,
+                                f"Registered as {existing_name} (ID: {existing_id})",
+                                (10, 160),
+                                cv2.FONT_HERSHEY_SIMPLEX,
+                                0.7,
+                                (0, 0, 255),
+                                2
+                            )
+                            cv2.imshow("Take Images", display_frame)
+                            
+                            # Wait for 3 seconds to show the warning
+                            cv2.waitKey(3000)
+                            
+                            # Clean up and exit
+                            cam.release()
+                            cv2.destroyAllWindows()
+                            
+                            # Clean up the created directory since we're canceling
+                            try:
+                                import shutil
+                                shutil.rmtree(student_dir)
+                            except:
+                                pass
+                            
+                            return False
+                        
+                        # Save the face image
                         img_name = os.path.join(student_dir, f"{img_counter}.jpg")
                         cv2.imwrite(img_name, face)
                         

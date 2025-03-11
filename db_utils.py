@@ -62,9 +62,15 @@ def student_exists(enrollment):
     # Read the CSV file
     try:
         df = pd.read_csv(config.STUDENT_DETAILS_PATH)
-        # Fix: Convert enrollment to string and use proper comparison
-        enrollment_str = str(enrollment)
-        return any(df['Enrollment'].astype(str) == enrollment_str)
+        
+        # Normalize enrollment ID (strip spaces, convert to lowercase string)
+        enrollment_str = str(enrollment).strip().lower()
+        
+        # Convert all enrollment IDs in the database to the same format
+        df_enrollments = df['Enrollment'].astype(str).str.strip().str.lower()
+        
+        # Check if enrollment exists
+        return enrollment_str in df_enrollments.values
     except Exception as e:
         print(f"Error checking if student exists: {e}")
         return False

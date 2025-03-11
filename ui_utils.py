@@ -117,13 +117,79 @@ def create_rounded_button(parent, text, command, width=20, height=2, radius=10):
     return frame
 
 def show_message(parent, title, message, message_type="info"):
-    """Show a message dialog"""
+    """
+    Show a message dialog with enhanced styling for error messages
+    
+    Args:
+        parent: Parent window
+        title: Dialog title
+        message: Message to display
+        message_type: Type of message (info, warning, error)
+    """
+    # Check if this is a duplicate worker warning
+    is_duplicate_worker = "already exists" in message.lower() or "already registered" in message.lower()
+    
     if message_type == "info":
         messagebox.showinfo(title, message, parent=parent)
     elif message_type == "warning":
         messagebox.showwarning(title, message, parent=parent)
     elif message_type == "error":
-        messagebox.showerror(title, message, parent=parent)
+        # For duplicate worker errors, create a custom dialog with red text
+        if is_duplicate_worker and parent:
+            # Create a custom dialog
+            dialog = tk.Toplevel(parent)
+            dialog.title(title)
+            dialog.geometry("400x200")
+            dialog.configure(background="#ffcccc")  # Light red background
+            dialog.grab_set()  # Make the dialog modal
+            
+            # Center the dialog
+            dialog.update_idletasks()
+            width = dialog.winfo_width()
+            height = dialog.winfo_height()
+            x = (dialog.winfo_screenwidth() // 2) - (width // 2)
+            y = (dialog.winfo_screenheight() // 2) - (height // 2)
+            dialog.geometry(f"{width}x{height}+{x}+{y}")
+            
+            # Add a warning icon (⚠️) or text
+            warning_label = tk.Label(
+                dialog,
+                text="⚠️ WARNING ⚠️",
+                font=("Arial", 16, "bold"),
+                fg="red",
+                bg="#ffcccc"
+            )
+            warning_label.pack(pady=(20, 10))
+            
+            # Add the message
+            msg_label = tk.Label(
+                dialog,
+                text=message,
+                wraplength=350,
+                justify="center",
+                font=("Arial", 12),
+                fg="red",
+                bg="#ffcccc"
+            )
+            msg_label.pack(pady=10)
+            
+            # Add an OK button
+            ok_button = tk.Button(
+                dialog,
+                text="OK",
+                command=dialog.destroy,
+                width=10,
+                bg="#ff6666",
+                fg="white",
+                font=("Arial", 10, "bold")
+            )
+            ok_button.pack(pady=20)
+            
+            # Wait for the dialog to be closed
+            parent.wait_window(dialog)
+        else:
+            # Use standard error dialog for other errors
+            messagebox.showerror(title, message, parent=parent)
     else:
         messagebox.showinfo(title, message, parent=parent)
 

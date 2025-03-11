@@ -40,6 +40,7 @@ UI_THEME = {
     "highlight_bg": "#0078D7",
     "error_fg": "yellow",
     "success_fg": "green",
+    "header_bg": "#2c3e50",
 }
 
 # CSV column names

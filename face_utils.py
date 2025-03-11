@@ -5,6 +5,8 @@ from PIL import Image
 import time
 from tqdm import tqdm
 import config
+from skimage.metrics import structural_similarity as ssim
+import face_recognition
 
 def detect_faces(image):
     """
@@ -486,4 +488,245 @@ def fallback_detect_faces(image):
         
     except Exception as e:
         print(f"Error in fallback_detect_faces: {e}")
-        return [] 
+        return []
+
+def check_face_exists(face_image):
+    """
+    Check if a similar face already exists in the training directory
+    
+    Args:
+        face_image: Face image to check
+        
+    Returns:
+        (exists, student_id, similarity) - Boolean if face exists, student ID if found, and similarity score
+    """
+    try:
+        # Convert to grayscale if needed
+        if len(face_image.shape) == 3:
+            gray_face = cv2.cvtColor(face_image, cv2.COLOR_BGR2GRAY)
+        else:
+            gray_face = face_image.copy()
+            
+        # Resize to standard size
+        gray_face = cv2.resize(gray_face, (200, 200))
+        
+        # Apply histogram equalization for better comparison
+        gray_face = cv2.equalizeHist(gray_face)
+        
+        # Get all student directories
+        training_dir = config.TRAINING_DIR
+        if not os.path.exists(training_dir):
+            return False, None, 0
+            
+        student_dirs = [d for d in os.listdir(training_dir) 
+                      if os.path.isdir(os.path.join(training_dir, d))]
+        
+        if not student_dirs:
+            return False, None, 0
+            
+        # Check similarity with existing faces
+        best_match_score = 0
+        best_match_id = None
+        
+        # Dictionary to track average similarity per student
+        student_similarities = {}
+        
+        for student_dir in student_dirs:
+            # Extract student ID from directory name
+            try:
+                student_id = student_dir.split('_')[0]
+            except:
+                continue
+                
+            # Get image files in the directory
+            student_dir_path = os.path.join(training_dir, student_dir)
+            image_files = [f for f in os.listdir(student_dir_path) 
+                         if f.endswith('.jpg') or f.endswith('.png')]
+            
+            # Skip if no images
+            if not image_files:
+                continue
+            
+            # Track scores for this student
+            scores = []
+            
+            # Check similarity with each image
+            for img_file in image_files:
+                img_path = os.path.join(student_dir_path, img_file)
+                try:
+                    # Load and preprocess image
+                    img = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
+                    if img is None:
+                        continue
+                        
+                    img = cv2.resize(img, (200, 200))
+                    img = cv2.equalizeHist(img)
+                    
+                    # Calculate similarity score using SSIM (Structural Similarity Index)
+                    score = ssim(gray_face, img)
+                    scores.append(score)
+                    
+                    # Update best match if better
+                    if score > best_match_score:
+                        best_match_score = score
+                        best_match_id = student_id
+                        
+                        # If we have a very high similarity with any single image, return immediately
+                        if score > 0.8:
+                            print(f"Found very similar face with score {score:.4f}")
+                            return True, student_id, score
+                        
+                except Exception as e:
+                    print(f"Error comparing with image {img_path}: {e}")
+                    continue
+            
+            # Calculate average similarity for this student (if we have at least 3 scores)
+            if len(scores) >= 3:
+                # Sort scores and take top 3 (best matches)
+                scores.sort(reverse=True)
+                top_scores = scores[:3]
+                avg_score = sum(top_scores) / len(top_scores)
+                student_similarities[student_id] = avg_score
+        
+        # Find the student with the highest average similarity
+        if student_similarities:
+            best_student_id = max(student_similarities, key=student_similarities.get)
+            best_avg_score = student_similarities[best_student_id]
+            
+            # Lower the threshold to 0.7 to be more strict
+            if best_avg_score > 0.7:
+                print(f"Found similar face with average score {best_avg_score:.4f}")
+                return True, best_student_id, best_avg_score
+        
+        # If no good average match, check if we have a strong single match
+        if best_match_score > 0.75:  # Lower this threshold too
+            print(f"Found similar face with single score {best_match_score:.4f}")
+            return True, best_match_id, best_match_score
+            
+        return False, None, best_match_score if best_match_score > 0 else 0
+            
+    except Exception as e:
+        print(f"Error checking if face exists: {e}")
+        return False, None, 0
+
+def check_face_exists_advanced(face_image):
+    """
+    Check if a similar face already exists using face_recognition library
+    
+    Args:
+        face_image: Face image to check (BGR format)
+        
+    Returns:
+        (exists, student_id, similarity) - Boolean if face exists, student ID if found, and similarity score
+    """
+    try:
+        # Check if face_image is valid
+        if face_image is None or face_image.size == 0:
+            print("Invalid face image provided to check_face_exists_advanced")
+            return False, None, 0
+        
+        # Convert BGR to RGB for face_recognition library
+        rgb_face = cv2.cvtColor(face_image, cv2.COLOR_BGR2RGB)
+        
+        # Get face encoding
+        face_locations = face_recognition.face_locations(rgb_face)
+        if not face_locations:
+            print("No face detected in the image")
+            return False, None, 0
+        
+        # Use the first face found
+        face_encoding = face_recognition.face_encodings(rgb_face, [face_locations[0]])[0]
+        
+        # Get all student directories
+        training_dir = config.TRAINING_DIR
+        if not os.path.exists(training_dir):
+            return False, None, 0
+            
+        student_dirs = [d for d in os.listdir(training_dir) 
+                      if os.path.isdir(os.path.join(training_dir, d))]
+        
+        if not student_dirs:
+            return False, None, 0
+        
+        # Check similarity with existing faces
+        best_match_score = 0
+        best_match_id = None
+        
+        for student_dir in student_dirs:
+            # Extract student ID from directory name
+            try:
+                student_id = student_dir.split('_')[0]
+            except:
+                continue
+                
+            # Get image files in the directory
+            student_dir_path = os.path.join(training_dir, student_dir)
+            image_files = [f for f in os.listdir(student_dir_path) 
+                         if f.endswith('.jpg') or f.endswith('.png')]
+            
+            # Skip if no images
+            if not image_files:
+                continue
+            
+            # Check similarity with each image
+            matches_count = 0
+            total_similarity = 0
+            
+            for img_file in image_files[:10]:  # Limit to first 10 images for performance
+                img_path = os.path.join(student_dir_path, img_file)
+                try:
+                    # Load image
+                    img = cv2.imread(img_path)
+                    if img is None:
+                        continue
+                    
+                    # Convert to RGB
+                    rgb_img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+                    
+                    # Get face locations
+                    img_face_locations = face_recognition.face_locations(rgb_img)
+                    if not img_face_locations:
+                        continue
+                    
+                    # Get face encodings
+                    img_face_encoding = face_recognition.face_encodings(rgb_img, [img_face_locations[0]])[0]
+                    
+                    # Compare faces
+                    face_distance = face_recognition.face_distance([img_face_encoding], face_encoding)[0]
+                    similarity = 1.0 - min(face_distance, 1.0)
+                    
+                    # If very similar, count as match
+                    if similarity > 0.6:  # Lower threshold for face_recognition
+                        matches_count += 1
+                        total_similarity += similarity
+                    
+                    # Update best match
+                    if similarity > best_match_score:
+                        best_match_score = similarity
+                        best_match_id = student_id
+                        
+                        # If extremely similar, return immediately
+                        if similarity > 0.8:
+                            print(f"Found very similar face with advanced score {similarity:.4f}")
+                            return True, student_id, similarity
+                    
+                except Exception as e:
+                    print(f"Error in advanced face comparison for {img_path}: {e}")
+                    continue
+            
+            # If we have multiple matches for this student, it's likely the same person
+            if matches_count >= 3:
+                avg_similarity = total_similarity / matches_count
+                print(f"Found {matches_count} matches with average similarity {avg_similarity:.4f}")
+                return True, student_id, avg_similarity
+        
+        # If best match is good enough, return it
+        if best_match_score > 0.65:
+            print(f"Found similar face with advanced score {best_match_score:.4f}")
+            return True, best_match_id, best_match_score
+        
+        return False, None, best_match_score
+        
+    except Exception as e:
+        print(f"Error in check_face_exists_advanced: {e}")
+        return False, None, 0 
