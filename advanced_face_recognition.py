@@ -253,13 +253,26 @@ def detect_duplicate_faces(training_data, threshold=0.85):
     
     return duplicates
 
-def train_advanced_model(train_dir, model_path):
+def get_trained_people():
+    """Get list of already trained people IDs"""
+    classifier_path = os.path.join(config.TRAINING_IMAGE_LABEL_DIR, "face_classifier.pkl")
+    if os.path.exists(classifier_path):
+        try:
+            classifier = joblib.load(classifier_path)
+            # Filter out -100 which is used for synthetic negative samples
+            return [id for id in classifier.classes_ if id != -100]
+        except Exception as e:
+            print(f"Error loading existing classifier: {e}")
+    return []
+
+def train_advanced_model(train_dir, model_path, progress_callback=None):
     """
     Train an advanced face recognition model
     
     Args:
         train_dir: Directory containing training images
         model_path: Path to save the trained model
+        progress_callback: Callback function for progress updates (value, status_text, details_text)
         
     Returns:
         True if training was successful, False otherwise
@@ -268,10 +281,17 @@ def train_advanced_model(train_dir, model_path):
         # Declare global variables at the beginning of the function
         global face_classifier
         
+        # Update progress
+        if progress_callback:
+            progress_callback(0, "Checking training directory...")
+        
         # Check if training directory exists
         if not os.path.exists(train_dir):
             print(f"Training directory does not exist: {train_dir}")
             return False
+        
+        # Get list of already trained people
+        trained_people = get_trained_people()
         
         # Get all person directories
         person_dirs = [os.path.join(train_dir, d) for d in os.listdir(train_dir) 
@@ -288,8 +308,27 @@ def train_advanced_model(train_dir, model_path):
         # Dictionary to store face encodings by person ID for duplicate detection
         training_data = {}
         
-        print("Extracting face features from training images...")
-        for person_dir in tqdm(person_dirs, desc="Processing people"):
+        # Load existing model data if available
+        if trained_people and os.path.exists(model_path):
+            try:
+                existing_classifier = joblib.load(model_path)
+                # Get support vectors from existing model
+                X = existing_classifier.support_vectors_.tolist()
+                y = [existing_classifier.predict([sv])[0] for sv in X]
+                print(f"Loaded {len(X)} existing face encodings for {len(set(y))} people")
+            except Exception as e:
+                print(f"Error loading existing model: {e}")
+                X = []
+                y = []
+        
+        # Update progress
+        if progress_callback:
+            progress_callback(5, "Extracting face features...", "Scanning directories...")
+        
+        total_dirs = len(person_dirs)
+        new_people_found = False
+        
+        for dir_idx, person_dir in enumerate(person_dirs):
             try:
                 # Extract enrollment ID from directory name
                 dir_name = os.path.basename(person_dir)
@@ -303,6 +342,13 @@ def train_advanced_model(train_dir, model_path):
                     print(f"Could not extract ID from directory name: {dir_name}")
                     continue
                 
+                # Skip if person is already trained
+                if person_id in trained_people:
+                    print(f"Skipping already trained person: {dir_name}")
+                    continue
+                
+                new_people_found = True
+                
                 # Get all images for this person
                 image_paths = [os.path.join(person_dir, f) for f in os.listdir(person_dir) 
                               if f.endswith(('.jpg', '.jpeg', '.png'))]
@@ -311,9 +357,18 @@ def train_advanced_model(train_dir, model_path):
                     print(f"No images found in {person_dir}")
                     continue
                 
+                # Update progress
+                if progress_callback:
+                    progress_value = 5 + (45 * dir_idx / total_dirs)
+                    progress_callback(
+                        progress_value,
+                        "Processing new registrations...",
+                        f"Processing {dir_name} ({len(image_paths)} images)"
+                    )
+                
                 # Process each image
                 person_encodings = []
-                for image_path in image_paths:
+                for img_idx, image_path in enumerate(image_paths):
                     try:
                         # Load image
                         image = cv2.imread(image_path)
@@ -329,7 +384,6 @@ def train_advanced_model(train_dir, model_path):
                         
                         # Use the largest face if multiple faces detected
                         if len(face_locations) > 1:
-                            # Find the largest face by area
                             largest_area = 0
                             largest_face_idx = 0
                             for i, (top, right, bottom, left) in enumerate(face_locations):
@@ -347,6 +401,15 @@ def train_advanced_model(train_dir, model_path):
                             continue
                         
                         person_encodings.append(encoding)
+                        
+                        # Update progress for each image
+                        if progress_callback and img_idx % 5 == 0:  # Update every 5 images
+                            sub_progress = img_idx / len(image_paths)
+                            progress_callback(
+                                progress_value + (sub_progress * 45 / total_dirs),
+                                "Processing images...",
+                                f"Processing {dir_name}: Image {img_idx + 1}/{len(image_paths)}"
+                            )
                     
                     except Exception as e:
                         print(f"Error processing image {image_path}: {e}")
@@ -356,8 +419,6 @@ def train_advanced_model(train_dir, model_path):
                 if len(person_encodings) >= 3:  # Require at least 3 valid images
                     X.extend(person_encodings)
                     y.extend([person_id] * len(person_encodings))
-                    
-                    # Store encodings for duplicate detection
                     training_data[person_id] = person_encodings
                 else:
                     print(f"Not enough valid images for person {dir_name}, skipping")
@@ -366,121 +427,115 @@ def train_advanced_model(train_dir, model_path):
                 print(f"Error processing person directory {person_dir}: {e}")
                 continue
         
+        if not new_people_found:
+            print("No new registrations found to train")
+            if progress_callback:
+                progress_callback(100, "No new registrations found", "Model is up to date")
+            return True
+
         if not X:
             print("No valid face encodings found for training!")
             return False
         
-        # Check for duplicate faces if we have multiple people
+        # Check for duplicate faces
+        if progress_callback:
+            progress_callback(50, "Checking for duplicate faces...")
+        
         if len(training_data) > 1:
-            print("Checking for duplicate faces...")
             duplicates = detect_duplicate_faces(training_data)
             if duplicates:
                 duplicate_message = "Potential duplicate faces detected:\n"
                 for id1, id2, similarity in duplicates:
-                    # Get student names
                     name1 = db_utils.get_student_name(id1) or str(id1)
                     name2 = db_utils.get_student_name(id2) or str(id2)
                     duplicate_message += f"- {name1} (ID: {id1}) and {name2} (ID: {id2}): {similarity*100:.1f}% similar\n"
-                
                 print(duplicate_message)
-                # Continue with training anyway
         
-        if len(set(y)) < 2:
-            print(f"Need at least 2 different people for training, only found {len(set(y))}")
-            
-            # If only one person is registered, we can still train a simple model
-            # that can recognize this person, but it won't be as accurate for distinguishing
-            # between different people
-            if len(set(y)) == 1:
-                print("Training with single person mode...")
-                # Create a simple classifier that can recognize the registered person
-                classifier = SVC(C=1.0, kernel='linear', probability=True)
-                
-                # Add some negative samples (random variations of the face encoding)
-                person_id = list(set(y))[0]
-                X_augmented = X.copy()
-                y_augmented = y.copy()
-                
-                # Create synthetic negative samples by adding noise to the existing encodings
-                np.random.seed(42)  # For reproducibility
-                for i in range(min(len(X), 10)):  # Add up to 10 negative samples
-                    # Create a negative sample by adding random noise
-                    noise = np.random.normal(0, 0.1, X[i].shape)
-                    negative_sample = X[i] + noise
-                    # Normalize to unit length like real face encodings
-                    negative_sample = negative_sample / np.linalg.norm(negative_sample)
-                    
-                    # Add to training data with a different label
-                    X_augmented = np.vstack([X_augmented, negative_sample])
-                    y_augmented = np.append(y_augmented, -100)  # Use -100 as the "unknown" label
-                
-                # Train with augmented data
-                print(f"Training with {len(X_augmented)} face encodings ({len(X)} real, {len(X_augmented)-len(X)} synthetic)")
-                classifier.fit(X_augmented, y_augmented)
-                
-                # Save the model
-                os.makedirs(os.path.dirname(model_path), exist_ok=True)
-                joblib.dump(classifier, model_path)
-                
-                # Also save as face_classifier.pkl for the module to use
-                classifier_path = os.path.join(config.TRAINING_IMAGE_LABEL_DIR, "face_classifier.pkl")
-                joblib.dump(classifier, classifier_path)
-                
-                # Update global variable
-                face_classifier = classifier
-                
-                print(f"Single-person model trained and saved to {model_path}")
-                return True
-            
-            return False
+        # Update progress
+        if progress_callback:
+            progress_callback(60, "Training model...", "Converting data...")
         
         # Convert lists to numpy arrays
         X = np.array(X)
         y = np.array(y)
         
-        print(f"Training with {len(X)} face encodings from {len(set(y))} different people")
+        if len(set(y)) < 2:
+            print(f"Need at least 2 different people for training, only found {len(set(y))}")
+            
+            # Handle single person case
+            if len(set(y)) == 1:
+                if progress_callback:
+                    progress_callback(70, "Training single-person model...")
+                
+                classifier = SVC(C=1.0, kernel='linear', probability=True)
+                person_id = list(set(y))[0]
+                X_augmented = X.copy()
+                y_augmented = y.copy()
+                
+                # Create synthetic negative samples
+                if progress_callback:
+                    progress_callback(80, "Generating synthetic samples...")
+                
+                np.random.seed(42)
+                for i in range(min(len(X), 10)):
+                    noise = np.random.normal(0, 0.1, X[i].shape)
+                    negative_sample = X[i] + noise
+                    negative_sample = negative_sample / np.linalg.norm(negative_sample)
+                    X_augmented = np.vstack([X_augmented, negative_sample])
+                    y_augmented = np.append(y_augmented, -100)
+                
+                if progress_callback:
+                    progress_callback(90, "Training classifier...")
+                
+                classifier.fit(X_augmented, y_augmented)
+                
+                # Save the model
+                if progress_callback:
+                    progress_callback(95, "Saving model...")
+                
+                os.makedirs(os.path.dirname(model_path), exist_ok=True)
+                joblib.dump(classifier, model_path)
+                
+                classifier_path = os.path.join(config.TRAINING_IMAGE_LABEL_DIR, "face_classifier.pkl")
+                joblib.dump(classifier, classifier_path)
+                
+                face_classifier = classifier
+                
+                if progress_callback:
+                    progress_callback(100, "Training completed!", "Single-person model trained successfully")
+                
+                return True
+            
+            return False
         
-        # Train classifier (SVM for better accuracy)
-        print("Training SVM classifier...")
+        # Train classifier
+        if progress_callback:
+            progress_callback(80, "Training classifier...", f"Processing {len(X)} face encodings from {len(set(y))} people")
+        
         classifier = SVC(C=1.0, kernel='linear', probability=True)
         classifier.fit(X, y)
         
         # Save the model
+        if progress_callback:
+            progress_callback(90, "Saving model...")
+        
         os.makedirs(os.path.dirname(model_path), exist_ok=True)
         joblib.dump(classifier, model_path)
         
-        # Also save as face_classifier.pkl for the module to use
         classifier_path = os.path.join(config.TRAINING_IMAGE_LABEL_DIR, "face_classifier.pkl")
         joblib.dump(classifier, classifier_path)
         
-        # Update global variable
         face_classifier = classifier
         
-        print(f"Advanced face recognition model trained and saved to {model_path}")
-        
-        # Check for duplicate faces
-        if message_callback:
-            message_callback("Checking for duplicate faces...")
-        
-        duplicates = detect_duplicate_faces(training_data)
-        if duplicates:
-            duplicate_message = "Potential duplicate faces detected:\n"
-            for id1, id2, similarity in duplicates:
-                # Get student names
-                name1 = db_utils.get_student_name(id1) or str(id1)
-                name2 = db_utils.get_student_name(id2) or str(id2)
-                duplicate_message += f"- {name1} (ID: {id1}) and {name2} (ID: {id2}): {similarity*100:.1f}% similar\n"
-            
-            if message_callback:
-                message_callback(duplicate_message)
-            
-            print(duplicate_message)
-            # Continue with training anyway
+        if progress_callback:
+            progress_callback(100, "Training completed!", f"Model trained with {len(X)} face encodings from {len(set(y))} people")
         
         return True
-    
+        
     except Exception as e:
         print(f"Error training advanced model: {e}")
+        if progress_callback:
+            progress_callback(0, f"Error: {str(e)}")
         return False
 
 def recognize_face_advanced(image, threshold=0.6):

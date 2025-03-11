@@ -1,5 +1,6 @@
 import tkinter as tk
 from tkinter import *
+from tkinter import ttk, messagebox
 import os
 import cv2
 import numpy as np
@@ -8,7 +9,6 @@ import datetime
 import time
 import pyttsx3
 import threading
-from tkinter import messagebox
 
 # Import our utility modules
 import config
@@ -707,17 +707,92 @@ class AttendanceSystem:
 
     def advanced_train_button_action(self):
         """Handle advanced train button click"""
-        # Update message
-        self.message_label.configure(text="Starting advanced training...")
+        # Create a progress bar window
+        progress_window = tk.Toplevel(self.root)
+        progress_window.title("Advanced Training Progress")
+        progress_window.geometry("400x150")
+        progress_window.configure(background=config.UI_THEME["bg_color"])
+        progress_window.transient(self.root)  # Set as transient to main window
+        progress_window.grab_set()  # Make it modal
         
-        # Run training in a separate thread to avoid freezing the UI
+        # Center the window
+        progress_window.update_idletasks()
+        width = progress_window.winfo_width()
+        height = progress_window.winfo_height()
+        x = (progress_window.winfo_screenwidth() // 2) - (width // 2)
+        y = (progress_window.winfo_screenheight() // 2) - (height // 2)
+        progress_window.geometry(f"{width}x{height}+{x}+{y}")
+        
+        # Add status label
+        status_label = tk.Label(
+            progress_window,
+            text="Initializing advanced training...",
+            bg=config.UI_THEME["bg_color"],
+            fg=config.UI_THEME["fg_color"],
+            font=("Verdana", 10)
+        )
+        status_label.pack(pady=10)
+        
+        # Add progress bar
+        progress_bar = ttk.Progressbar(
+            progress_window,
+            orient="horizontal",
+            length=300,
+            mode="determinate"
+        )
+        progress_bar.pack(pady=10)
+        
+        # Add details label
+        details_label = tk.Label(
+            progress_window,
+            text="",
+            bg=config.UI_THEME["bg_color"],
+            fg=config.UI_THEME["fg_color"],
+            font=("Verdana", 9)
+        )
+        details_label.pack(pady=5)
+        
+        def update_progress(value, status_text, details_text=""):
+            """Thread-safe progress update"""
+            def update():
+                if progress_window.winfo_exists():  # Check if window still exists
+                    progress_bar["value"] = value
+                    status_label.config(text=status_text)
+                    details_label.config(text=details_text)
+                    progress_window.update_idletasks()
+            self.root.after(10, update)  # Schedule update on main thread
+        
+        # Run training in a separate thread
         def training_thread():
-            train_advanced_model.train_advanced_model(
-                self.message_label,
-                text_to_speech,
-                self.root
-            )
+            try:
+                success = afr.train_advanced_model(
+                    config.TRAINING_DIR,
+                    os.path.join(config.TRAINING_IMAGE_LABEL_DIR, "face_classifier.pkl"),
+                    progress_callback=update_progress
+                )
+                
+                def update_final_message():
+                    if success:
+                        self.message_label.config(text="Advanced training completed successfully!")
+                        text_to_speech("Advanced training completed successfully!")
+                    else:
+                        self.message_label.config(text="Advanced training failed. Please check the logs.")
+                        text_to_speech("Advanced training failed.")
+                    progress_window.destroy()
+                
+                # Schedule final message update on main thread
+                self.root.after(100, update_final_message)
+                
+            except Exception as e:
+                def show_error():
+                    self.message_label.config(text=f"Error in advanced training: {str(e)}")
+                    text_to_speech("Error in advanced training.")
+                    progress_window.destroy()
+                
+                # Schedule error message update on main thread
+                self.root.after(100, show_error)
         
+        # Start the training thread
         threading.Thread(target=training_thread, daemon=True).start()
 
 # Main entry point
