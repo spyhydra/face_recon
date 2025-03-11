@@ -51,11 +51,14 @@ def TakeImage(enrollment, name, message_label, text_to_speech):
         
         # Start time for timeout
         start_time = time.time()
-        timeout = 120  # 120 seconds timeout (increased from 60)
+        timeout = 120  # 120 seconds timeout
         
         # Time of last capture
         last_capture_time = 0
         capture_delay = 0.5  # 0.5 seconds between captures
+        
+        # Track if we've found a duplicate
+        duplicate_found = False
         
         # Instructions
         cv2.namedWindow("Take Images", cv2.WINDOW_NORMAL)
@@ -71,6 +74,12 @@ def TakeImage(enrollment, name, message_label, text_to_speech):
                 text_to_speech(message)
                 cam.release()
                 cv2.destroyAllWindows()
+                # Clean up the created directory
+                try:
+                    import shutil
+                    shutil.rmtree(student_dir)
+                except:
+                    pass
                 return False
             
             # Read frame
@@ -86,29 +95,11 @@ def TakeImage(enrollment, name, message_label, text_to_speech):
             # Create a copy for display
             display_frame = frame.copy()
             
-            # Try multiple face detection methods to ensure we detect faces
-            faces = []
-            
-            # First try with face_utils.detect_faces
-            try:
-                faces = face_utils.detect_faces(frame)
-            except Exception as e:
-                print(f"Primary face detection failed: {e}")
-            
-            # If no faces detected, try with a simpler method
+            # Detect faces
+            faces = face_utils.detect_faces(frame)
             if len(faces) == 0:
-                try:
-                    # Use OpenCV's built-in face detector as fallback
-                    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                    face_cascade = cv2.CascadeClassifier(config.HAARCASCADE_FRONTAL_FACE_PATH)
-                    faces = face_cascade.detectMultiScale(
-                        gray,
-                        scaleFactor=1.1,
-                        minNeighbors=5,
-                        minSize=(30, 30)
-                    )
-                except Exception as e:
-                    print(f"Fallback face detection failed: {e}")
+                # If no faces detected, try fallback method
+                faces = face_utils.fallback_detect_faces(frame)
             
             # Draw rectangle around face and add text
             for (x, y, w, h) in faces:
@@ -147,6 +138,12 @@ def TakeImage(enrollment, name, message_label, text_to_speech):
                 text_to_speech(message)
                 cam.release()
                 cv2.destroyAllWindows()
+                # Clean up the created directory
+                try:
+                    import shutil
+                    shutil.rmtree(student_dir)
+                except:
+                    pass
                 return False
             
             # Determine if we should capture now
@@ -174,19 +171,28 @@ def TakeImage(enrollment, name, message_label, text_to_speech):
                                 x_with_margin:x_with_margin+w_with_margin]
                     
                     # Ensure the face image is not empty
-                    if face.size > 0:
-                        # Check if this face is a duplicate - do this check EVERY time, not just for the first image
-                        # First try with SSIM method
-                        face_exists, existing_id, similarity = face_utils.check_face_exists(face)
+                    if face.size == 0:
+                        continue
+                    
+                    # Only check for duplicates for the first few images
+                    if img_counter < 3:
+                        # Check for duplicates with both methods
+                        face_exists = False
+                        existing_id = None
+                        similarity = 0
                         
-                        # If not found with SSIM, try with advanced method
-                        if not face_exists:
-                            try:
+                        try:
+                            # Try SSIM method first
+                            face_exists, existing_id, similarity = face_utils.check_face_exists(face)
+                            
+                            # If not found with SSIM, try advanced method
+                            if not face_exists:
                                 face_exists, existing_id, similarity = face_utils.check_face_exists_advanced(face)
-                            except Exception as e:
-                                print(f"Error in advanced face check: {e}")
+                        except Exception as e:
+                            print(f"Error in duplicate check: {e}")
+                            continue
                         
-                        if face_exists:
+                        if face_exists and existing_id != enrollment:  # Only consider it duplicate if it's a different ID
                             # Get student name
                             existing_name = db_utils.get_student_name(existing_id)
                             
@@ -215,40 +221,42 @@ def TakeImage(enrollment, name, message_label, text_to_speech):
                                 2
                             )
                             cv2.imshow("Take Images", display_frame)
-                            
-                            # Wait for 3 seconds to show the warning
                             cv2.waitKey(3000)
                             
-                            # Clean up and exit
-                            cam.release()
-                            cv2.destroyAllWindows()
-                            
-                            # Clean up the created directory since we're canceling
-                            try:
-                                import shutil
-                                shutil.rmtree(student_dir)
-                            except:
-                                pass
-                            
-                            return False
-                        
-                        # Save the face image
-                        img_name = os.path.join(student_dir, f"{img_counter}.jpg")
-                        cv2.imwrite(img_name, face)
-                        
-                        img_counter += 1
-                        last_capture_time = time.time()
-                        
-                        # Update message
-                        message = f"Image {img_counter}/{sample_count} captured."
-                        message_label.config(text=message)
-                        
-                        # Only speak every 10 images to avoid too much speech
-                        if img_counter % 10 == 0 or img_counter == sample_count:
-                            text_to_speech(message)
-                        
-                        # Break after capturing one face (the largest one)
+                            duplicate_found = True
+                            break
+                    
+                    if duplicate_found:
                         break
+                    
+                    # Save the face image
+                    img_name = os.path.join(student_dir, f"{img_counter}.jpg")
+                    cv2.imwrite(img_name, face)
+                    
+                    img_counter += 1
+                    last_capture_time = time.time()
+                    
+                    # Update message
+                    message = f"Image {img_counter}/{sample_count} captured."
+                    message_label.config(text=message, fg="black")  # Reset text color to black
+                    
+                    # Only speak every 10 images to avoid too much speech
+                    if img_counter % 10 == 0 or img_counter == sample_count:
+                        text_to_speech(message)
+                    
+                    break  # Break after capturing one face
+            
+            if duplicate_found:
+                # Clean up
+                cam.release()
+                cv2.destroyAllWindows()
+                # Remove the directory since we found a duplicate
+                try:
+                    import shutil
+                    shutil.rmtree(student_dir)
+                except:
+                    pass
+                return False
         
         # Release camera and close windows
         cam.release()
@@ -259,17 +267,25 @@ def TakeImage(enrollment, name, message_label, text_to_speech):
             message = f"Not enough images captured ({img_counter}). Please try again."
             message_label.config(text=message)
             text_to_speech(message)
+            # Clean up the directory
+            try:
+                import shutil
+                shutil.rmtree(student_dir)
+            except:
+                pass
             return False
         
-        # Add student to database
-        db_utils.add_student(enrollment, name)
+        # Add student to database only if we have enough images
+        if img_counter >= 5:
+            db_utils.add_student(enrollment, name)
+            
+            # Final message
+            message = f"Images captured successfully for {name} ({enrollment})."
+            message_label.config(text=message)
+            text_to_speech(message)
+            return True
         
-        # Final message
-        message = f"Images captured successfully for {name} ({enrollment})."
-        message_label.config(text=message)
-        text_to_speech(message)
-        
-        return True
+        return False
     
     except Exception as e:
         # Handle exceptions
@@ -282,6 +298,9 @@ def TakeImage(enrollment, name, message_label, text_to_speech):
         try:
             cam.release()
             cv2.destroyAllWindows()
+            # Clean up the directory in case of error
+            import shutil
+            shutil.rmtree(student_dir)
         except:
             pass
         

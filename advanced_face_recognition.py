@@ -253,18 +253,6 @@ def detect_duplicate_faces(training_data, threshold=0.85):
     
     return duplicates
 
-def get_trained_people():
-    """Get list of already trained people IDs"""
-    classifier_path = os.path.join(config.TRAINING_IMAGE_LABEL_DIR, "face_classifier.pkl")
-    if os.path.exists(classifier_path):
-        try:
-            classifier = joblib.load(classifier_path)
-            # Filter out -100 which is used for synthetic negative samples
-            return [id for id in classifier.classes_ if id != -100]
-        except Exception as e:
-            print(f"Error loading existing classifier: {e}")
-    return []
-
 def train_advanced_model(train_dir, model_path, progress_callback=None):
     """
     Train an advanced face recognition model
@@ -290,9 +278,6 @@ def train_advanced_model(train_dir, model_path, progress_callback=None):
             print(f"Training directory does not exist: {train_dir}")
             return False
         
-        # Get list of already trained people
-        trained_people = get_trained_people()
-        
         # Get all person directories
         person_dirs = [os.path.join(train_dir, d) for d in os.listdir(train_dir) 
                       if os.path.isdir(os.path.join(train_dir, d))]
@@ -308,26 +293,11 @@ def train_advanced_model(train_dir, model_path, progress_callback=None):
         # Dictionary to store face encodings by person ID for duplicate detection
         training_data = {}
         
-        # Load existing model data if available
-        if trained_people and os.path.exists(model_path):
-            try:
-                existing_classifier = joblib.load(model_path)
-                # Get support vectors from existing model
-                X = existing_classifier.support_vectors_.tolist()
-                y = [existing_classifier.predict([sv])[0] for sv in X]
-                print(f"Loaded {len(X)} existing face encodings for {len(set(y))} people")
-            except Exception as e:
-                print(f"Error loading existing model: {e}")
-                X = []
-                y = []
-        
         # Update progress
         if progress_callback:
             progress_callback(5, "Extracting face features...", "Scanning directories...")
         
         total_dirs = len(person_dirs)
-        new_people_found = False
-        
         for dir_idx, person_dir in enumerate(person_dirs):
             try:
                 # Extract enrollment ID from directory name
@@ -342,13 +312,6 @@ def train_advanced_model(train_dir, model_path, progress_callback=None):
                     print(f"Could not extract ID from directory name: {dir_name}")
                     continue
                 
-                # Skip if person is already trained
-                if person_id in trained_people:
-                    print(f"Skipping already trained person: {dir_name}")
-                    continue
-                
-                new_people_found = True
-                
                 # Get all images for this person
                 image_paths = [os.path.join(person_dir, f) for f in os.listdir(person_dir) 
                               if f.endswith(('.jpg', '.jpeg', '.png'))]
@@ -362,7 +325,7 @@ def train_advanced_model(train_dir, model_path, progress_callback=None):
                     progress_value = 5 + (45 * dir_idx / total_dirs)
                     progress_callback(
                         progress_value,
-                        "Processing new registrations...",
+                        "Processing images...",
                         f"Processing {dir_name} ({len(image_paths)} images)"
                     )
                 
@@ -427,12 +390,6 @@ def train_advanced_model(train_dir, model_path, progress_callback=None):
                 print(f"Error processing person directory {person_dir}: {e}")
                 continue
         
-        if not new_people_found:
-            print("No new registrations found to train")
-            if progress_callback:
-                progress_callback(100, "No new registrations found", "Model is up to date")
-            return True
-
         if not X:
             print("No valid face encodings found for training!")
             return False
